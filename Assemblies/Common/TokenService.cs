@@ -333,32 +333,6 @@ WHERE grp = (SELECT grp FROM streak ORDER BY d DESC LIMIT 1)", conn);
         }
 
         /// <summary>
-        /// Marks a game ticket as used in the database shadow but keeps it in memory cache.
-        /// The ticket will expire naturally after 15 minutes of inactivity from the memory cache.
-        /// </summary>
-        public async Task MarkTicketUsedAsync(string token)
-        {
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    using var conn = new NpgsqlConnection(_connectionString);
-                    await conn.OpenAsync();
-                    using var cmd = new NpgsqlCommand(@"
-                        UPDATE authentication_tickets 
-                        SET is_active = false, used_at = NOW()
-                        WHERE ticket_token = @token", conn);
-                    
-                    cmd.Parameters.AddWithValue("token", token);
-                    await cmd.ExecuteNonQueryAsync();
-                }
-                catch (Exception ex) { Console.WriteLine($"[ERROR] MarkTicketUsedAsync: {ex}"); }
-            });
-
-            await Task.CompletedTask;
-        }
-
-        /// <summary>
         /// Cleans up expired game tickets from the database shadow table.
         /// This should be called periodically by a background service.
         /// </summary>
