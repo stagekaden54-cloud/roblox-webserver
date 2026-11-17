@@ -184,14 +184,9 @@ namespace Website.Controllers.Client
                     !placeElement.TryGetInt64(out var actualPlaceId) ||
                     !root.TryGetProperty("port", out var portElement) ||
                     !portElement.TryGetInt32(out var actualPort) ||
-                    actualPlaceId <= 0 || actualPort <= 0 || actualPort > 65535)
-                {
-                    return (false, 0, 0);
-                }
-
-                if (!root.TryGetProperty("status", out var statusElement) ||
+                    !root.TryGetProperty("status", out var statusElement) ||
                     statusElement.ValueKind != JsonValueKind.String ||
-                    !string.Equals(statusElement.GetString(), "running", StringComparison.OrdinalIgnoreCase))
+                    !GameServerStatusValidator.IsJoinable(actualPlaceId, actualPort, statusElement.GetString()))
                 {
                     return (false, 0, 0);
                 }
