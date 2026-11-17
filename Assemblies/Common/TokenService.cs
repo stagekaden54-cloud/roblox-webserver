@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -19,18 +20,14 @@ namespace Games
     {
         private readonly string _connectionString;
         private readonly string _publicBaseUrl;
-        private readonly IMemoryCache _memoryCache;
-        private readonly MemoryCacheEntryOptions _ticketCacheOptions;
+        private readonly ConcurrentDictionary<string, GameTicket> _guestTickets = new();
 
         public TokenService(IConfiguration configuration, IMemoryCache memoryCache)
         {
             _connectionString = configuration.GetConnectionString("Default") 
                 ?? throw new ArgumentNullException("Database connection string not configured");
             _publicBaseUrl = configuration["PublicBaseUrl"] ?? string.Empty;
-            _memoryCache = memoryCache ?? throw new ArgumentNullException(nameof(memoryCache));
-            _ticketCacheOptions = new MemoryCacheEntryOptions()
-                .SetAbsoluteExpiration(TimeSpan.FromMinutes(15))
-                .SetPriority(CacheItemPriority.Normal);
+            _ = memoryCache ?? throw new ArgumentNullException(nameof(memoryCache));
             _ = EnsureSessionsTable();
         }
 
@@ -200,85 +197,139 @@ WHERE grp = (SELECT grp FROM streak ORDER BY d DESC LIMIT 1)", conn);
         }
 
         /// <summary>
-        /// Creates a short-lived game ticket stored in memory cache.
-        /// These tickets are for single-use game joins and expire after 15 minutes.
+        /// Creates a short-lived game ticket. Registered-user tickets are persisted
+        /// before the token is returned so an immediate authentication request cannot
+        /// race a background database insert. Guest tickets remain process-local until
+        /// the separate guest-identity work is completed.
         /// </summary>
         public async Task<string> CreateGameTicketAsync(long userId, long placeId, string? jobId = null)
         {
             var token = GenerateToken("game_");
+            var now = DateTimeOffset.UtcNow;
             var ticket = new GameTicket
             {
                 Token = token,
                 UserId = userId,
                 PlaceId = placeId,
                 JobId = jobId,
-                CreatedAt = DateTimeOffset.UtcNow,
-                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(15),
+                CreatedAt = now,
+                ExpiresAt = now.AddMinutes(15),
                 IsUsed = false
             };
 
-            _memoryCache.Set(token, ticket, _ticketCacheOptions);
-
-            _ = Task.Run(async () =>
+            if (userId <= 0)
             {
-                try
-                {
-                    var userExists = false;
-                    await using (var checkConn = new NpgsqlConnection(_connectionString))
-                    {
-                        await checkConn.OpenAsync();
-                        using var checkCmd = new NpgsqlCommand("select 1 from users where user_id = @id", checkConn);
-                        checkCmd.Parameters.AddWithValue("id", userId);
-                        userExists = await checkCmd.ExecuteScalarAsync() != null;
-                    }
-                    if (!userExists)
-                    {
-                        return;
-                    }
+                _guestTickets[token] = ticket;
+                return token;
+            }
 
-                    var authenticationUrl = $"{_publicBaseUrl}/Game/PlaceLauncher.ashx?request=AuthenticateTicket";
-                    var joinScriptUrl = $"{_publicBaseUrl}/Game/PlaceLauncher.ashx?request=RequestGame&placeId={placeId}&isPartyLeader=false&gender=&isTeleport=true";
+            var authenticationUrl = $"{_publicBaseUrl}/Game/PlaceLauncher.ashx?request=AuthenticateTicket";
+            var joinScriptUrl = $"{_publicBaseUrl}/Game/PlaceLauncher.ashx?request=RequestGame&placeId={placeId}&isPartyLeader=false&gender=&isTeleport=true";
 
-                    using var conn = new NpgsqlConnection(_connectionString);
-                    await conn.OpenAsync();
-                    using var cmd = new NpgsqlCommand(@"
-                        INSERT INTO authentication_tickets 
-                        (ticket_token, user_id, place_id, authentication_url, join_script_url, created_at, expires_at, is_active, memory_cached, cache_expires_at, ticket_type)
-                        VALUES (@token, @user_id, @place_id, @auth_url, @join_url, NOW(), NOW() + INTERVAL '15 minutes', true, true, NOW() + INTERVAL '15 minutes', 'game_session')
-                        ON CONFLICT (ticket_token) DO NOTHING", conn);
-                    
-                    cmd.Parameters.AddWithValue("token", token);
-                    cmd.Parameters.AddWithValue("user_id", userId);
-                    cmd.Parameters.AddWithValue("place_id", placeId > 0 ? (object)placeId : DBNull.Value);
-                    cmd.Parameters.AddWithValue("auth_url", authenticationUrl);
-                    cmd.Parameters.AddWithValue("join_url", joinScriptUrl);
-                    await cmd.ExecuteNonQueryAsync();
-                }
-                catch (Exception ex) { Console.WriteLine($"[ERROR] CreateGameTicketAsync insert: {ex}"); }
-            });
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(@"
+                INSERT INTO authentication_tickets
+                    (ticket_token, user_id, place_id, authentication_url, join_script_url,
+                     created_at, expires_at, is_active, memory_cached, cache_expires_at, ticket_type)
+                VALUES
+                    (@token, @user_id, @place_id, @auth_url, @join_url,
+                     @created_at, @expires_at, true, false, NULL, 'game_session')", conn);
+
+            cmd.Parameters.AddWithValue("token", token);
+            cmd.Parameters.AddWithValue("user_id", userId);
+            cmd.Parameters.AddWithValue("place_id", placeId > 0 ? (object)placeId : DBNull.Value);
+            cmd.Parameters.AddWithValue("auth_url", authenticationUrl);
+            cmd.Parameters.AddWithValue("join_url", joinScriptUrl);
+            cmd.Parameters.AddWithValue("created_at", now.UtcDateTime);
+            cmd.Parameters.AddWithValue("expires_at", ticket.ExpiresAt.UtcDateTime);
+            await cmd.ExecuteNonQueryAsync();
 
             return token;
         }
 
         /// <summary>
-        /// Validates a game ticket from memory cache.
-        /// Returns null if ticket is expired or not found.
-        /// Tickets remain valid for 15 minutes regardless of use count.
+        /// Reads a game ticket without consuming it. Use ConsumeGameTicketAsync
+        /// for authentication so only one concurrent request can redeem a ticket.
         /// </summary>
-        public Task<GameTicket?> ValidateGameTicketAsync(string token)
+        public async Task<GameTicket?> ValidateGameTicketAsync(string token)
         {
-            if (string.IsNullOrEmpty(token) || !token.StartsWith("game_"))
-                return Task.FromResult<GameTicket?>(null);
+            if (string.IsNullOrEmpty(token) || !token.StartsWith("game_", StringComparison.Ordinal))
+                return null;
 
-            if (_memoryCache.TryGetValue(token, out GameTicket? ticket))
+            if (_guestTickets.TryGetValue(token, out var guestTicket))
+                return guestTicket.ExpiresAt > DateTimeOffset.UtcNow ? guestTicket : null;
+
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(@"
+                SELECT user_id, COALESCE(place_id, 0), created_at, expires_at, used_at
+                FROM authentication_tickets
+                WHERE ticket_token = @token
+                  AND ticket_type = 'game_session'
+                  AND is_active = true
+                  AND used_at IS NULL
+                  AND expires_at > NOW()
+                LIMIT 1", conn);
+            cmd.Parameters.AddWithValue("token", token);
+
+            await using var reader = await cmd.ExecuteReaderAsync();
+            if (!await reader.ReadAsync())
+                return null;
+
+            return new GameTicket
             {
-                if (ticket != null && ticket.ExpiresAt > DateTimeOffset.UtcNow)
-                {
-                    return Task.FromResult<GameTicket?>(ticket);
-                }
+                Token = token,
+                UserId = reader.GetInt64(0),
+                PlaceId = reader.GetInt64(1),
+                CreatedAt = new DateTimeOffset(DateTime.SpecifyKind(reader.GetDateTime(2), DateTimeKind.Utc)),
+                ExpiresAt = new DateTimeOffset(DateTime.SpecifyKind(reader.GetDateTime(3), DateTimeKind.Utc)),
+                IsUsed = !reader.IsDBNull(4)
+            };
+        }
+
+        /// <summary>
+        /// Atomically consumes a game ticket. For persisted tickets, the conditional
+        /// UPDATE ... RETURNING is the single-use gate across concurrent requests and
+        /// multiple application instances. Guest tickets are process-local for now.
+        /// </summary>
+        public async Task<GameTicket?> ConsumeGameTicketAsync(string token)
+        {
+            if (string.IsNullOrEmpty(token) || !token.StartsWith("game_", StringComparison.Ordinal))
+                return null;
+
+            if (_guestTickets.TryRemove(token, out var guestTicket))
+            {
+                return guestTicket.ExpiresAt > DateTimeOffset.UtcNow ? guestTicket : null;
             }
 
-            return Task.FromResult<GameTicket?>(null);
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(@"
+                UPDATE authentication_tickets
+                SET used_at = NOW(),
+                    is_active = false
+                WHERE ticket_token = @token
+                  AND ticket_type = 'game_session'
+                  AND is_active = true
+                  AND used_at IS NULL
+                  AND expires_at > NOW()
+                RETURNING user_id, COALESCE(place_id, 0), created_at, expires_at", conn);
+            cmd.Parameters.AddWithValue("token", token);
+
+            await using var reader = await cmd.ExecuteReaderAsync();
+            if (!await reader.ReadAsync())
+                return null;
+
+            return new GameTicket
+            {
+                Token = token,
+                UserId = reader.GetInt64(0),
+                PlaceId = reader.GetInt64(1),
+                CreatedAt = new DateTimeOffset(DateTime.SpecifyKind(reader.GetDateTime(2), DateTimeKind.Utc)),
+                ExpiresAt = new DateTimeOffset(DateTime.SpecifyKind(reader.GetDateTime(3), DateTimeKind.Utc)),
+                IsUsed = true
+            };
         }
 
         /// <summary>
