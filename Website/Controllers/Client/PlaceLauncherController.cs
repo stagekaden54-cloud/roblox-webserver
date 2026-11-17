@@ -65,7 +65,7 @@ namespace Website.Controllers.Client
             {
                 return request switch
                 {
-                    "RequestGame" or "RequestGameJob" or "RequestFollowUser" => await HandleRequestGame(placeId.Value, request, jobid, serverPort, requestId),
+                    "RequestGame" or "RequestGameJob" or "RequestFollowUser" => await HandleRequestGame(placeId.Value, request, jobid, requestId),
                     "RequestPrivateGame" => await HandleRequestPrivateGame(placeId.Value, Request.Query["accessCode"].ToString(), requestId),
                     "CloudEdit" => await HandleCloudEdit(placeId.Value, requestId),
                     "AuthenticateTicket" => await HandleAuthenticateTicket(),
@@ -230,7 +230,7 @@ namespace Website.Controllers.Client
             return ("Unknown", "Unknown");
         }
 
-        private async Task<IActionResult> HandleRequestGame(long placeId, string requestType, string? providedJobId, int? providedServerPort, string requestId)
+        private async Task<IActionResult> HandleRequestGame(long placeId, string requestType, string? providedJobId, string requestId)
         {
             long userId = await GetCurrentUserIdAsync();
             if (userId > 0)
