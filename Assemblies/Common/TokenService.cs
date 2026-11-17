@@ -233,7 +233,7 @@ WHERE grp = (SELECT grp FROM streak ORDER BY d DESC LIMIT 1)", conn);
 
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
-            await using var cmd = new NpgsqlCommand(@"
+            using var cmd = new NpgsqlCommand(@"
                 INSERT INTO authentication_tickets
                     (ticket_token, user_id, place_id, authentication_url, join_script_url,
                      created_at, expires_at, is_active, memory_cached, cache_expires_at, ticket_type)
@@ -267,7 +267,7 @@ WHERE grp = (SELECT grp FROM streak ORDER BY d DESC LIMIT 1)", conn);
 
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
-            await using var cmd = new NpgsqlCommand(@"
+            using var cmd = new NpgsqlCommand(@"
                 SELECT user_id, COALESCE(place_id, 0), created_at, expires_at, used_at
                 FROM authentication_tickets
                 WHERE ticket_token = @token
@@ -310,7 +310,7 @@ WHERE grp = (SELECT grp FROM streak ORDER BY d DESC LIMIT 1)", conn);
 
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
-            await using var cmd = new NpgsqlCommand(@"
+            using var cmd = new NpgsqlCommand(@"
                 UPDATE authentication_tickets
                 SET used_at = NOW(),
                     is_active = false
