@@ -4,9 +4,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Caching;
 using Npgsql;
 
 namespace Games
@@ -22,12 +20,11 @@ namespace Games
         private readonly string _publicBaseUrl;
         private readonly ConcurrentDictionary<string, GameTicket> _guestTickets = new();
 
-        public TokenService(IConfiguration configuration, IMemoryCache memoryCache)
+        public TokenService(IConfiguration configuration)
         {
             _connectionString = configuration.GetConnectionString("Default") 
                 ?? throw new ArgumentNullException("Database connection string not configured");
             _publicBaseUrl = configuration["PublicBaseUrl"] ?? string.Empty;
-            _ = memoryCache ?? throw new ArgumentNullException(nameof(memoryCache));
             _ = EnsureSessionsTable();
         }
 
