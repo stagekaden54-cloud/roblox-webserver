@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Games;
+using GameTokenService = Games.TokenService;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
 using Xunit;
@@ -16,7 +16,7 @@ public sealed class GameTicketConsumptionTests : IAsyncLifetime
 
     private readonly string _schema = "ticket_tests_" + Guid.NewGuid().ToString("N");
     private string _testConnectionString = string.Empty;
-    private TokenService _service = null!;
+    private GameTokenService _service = null!;
 
     public async Task InitializeAsync()
     {
@@ -67,7 +67,7 @@ public sealed class GameTicketConsumptionTests : IAsyncLifetime
                 ["PublicBaseUrl"] = "https://block16.example"
             })
             .Build();
-        _service = new TokenService(configuration);
+        _service = new GameTokenService(configuration);
     }
 
     public async Task DisposeAsync()
