@@ -1,0 +1,45 @@
+name: Game ticket verification
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "Assemblies/Common/**"
+      - "Website/**"
+      - "Tests/TokenService.IntegrationTests/**"
+      - ".github/workflows/game-ticket-verification.yml"
+  push:
+    branches: [ "feature/atomic-game-ticket-consumption" ]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TEST_DATABASE: Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore website
+        run: dotnet restore Website/RobloxWebserver.csproj
+      - name: Build website
+        run: dotnet build Website/RobloxWebserver.csproj --configuration Release --no-restore
+      - name: Restore ticket integration tests
+        run: dotnet restore Tests/TokenService.IntegrationTests/TokenService.IntegrationTests.csproj
+      - name: Run ticket integration tests
+        run: dotnet test Tests/TokenService.IntegrationTests/TokenService.IntegrationTests.csproj --configuration Release --no-restore --logger "console;verbosity=normal"
