@@ -189,15 +189,11 @@ namespace Website.Controllers.Client
                     return (false, 0, 0);
                 }
 
-                if (root.TryGetProperty("status", out var statusElement) &&
-                    statusElement.ValueKind == JsonValueKind.String)
+                if (!root.TryGetProperty("status", out var statusElement) ||
+                    statusElement.ValueKind != JsonValueKind.String ||
+                    !string.Equals(statusElement.GetString(), "running", StringComparison.OrdinalIgnoreCase))
                 {
-                    var status = statusElement.GetString();
-                    if (string.Equals(status, "stopped", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(status, "expired", StringComparison.OrdinalIgnoreCase))
-                    {
-                        return (false, 0, 0);
-                    }
+                    return (false, 0, 0);
                 }
 
                 return (true, actualPort, actualPlaceId);
