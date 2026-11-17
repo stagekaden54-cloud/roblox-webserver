@@ -862,13 +862,11 @@ namespace Website.Controllers.Client
                 return Unauthorized();
             }
 
-            var ticket = await _tokenService.ValidateGameTicketAsync(suggest);
+            var ticket = await _tokenService.ConsumeGameTicketAsync(suggest);
             if (ticket == null)
             {
                 return Unauthorized();
             }
-
-            await _tokenService.MarkTicketUsedAsync(suggest);
             var sessionToken = await _tokenService.CreateSessionAsync(ticket.UserId, HttpContext.Connection.RemoteIpAddress?.ToString());
             var cookieOptions = new Microsoft.AspNetCore.Http.CookieOptions
             {
