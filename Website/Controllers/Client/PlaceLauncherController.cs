@@ -263,10 +263,20 @@ namespace Website.Controllers.Client
             string gameId;
             int serverPort;
 
-            var (resumeAlive, resumePort, resumePlaceId) =
-                await GetGameServerInfoAsync(providedJobId ?? "");
-            if (!string.IsNullOrWhiteSpace(providedJobId) && resumeAlive)
+            if (!string.IsNullOrWhiteSpace(providedJobId))
             {
+                var (resumeAlive, resumePort, resumePlaceId) =
+                    await GetGameServerInfoAsync(providedJobId);
+
+                if (!resumeAlive)
+                {
+                    return Ok(new PlaceLauncherResponse
+                    {
+                        status = 4,
+                        message = "The requested game server is no longer available. Please request a new server."
+                    });
+                }
+
                 if (resumePlaceId != placeId)
                 {
                     return Ok(new PlaceLauncherResponse
