@@ -546,13 +546,6 @@ namespace Website.Controllers.Client
                     HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity());
                 }
 
-                var arbiterHost = _configuration["Arbiter:Host"] ?? "localhost";
-                var arbiterPort = _configuration["Arbiter:Port"] ?? "5000";
-                var arbiterUrl = $"http://{arbiterHost}:{arbiterPort}";
-                
-                using var httpClient = HttpClientDefaults.CreateLocalClient();
-                httpClient.Timeout = Common.HttpClientDefaults.Timeout;
-                
                 var (serverAlive, verifiedPort, serverPlaceId) =
                     await GetGameServerInfoAsync(jobid);
 
