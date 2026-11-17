@@ -10,9 +10,8 @@ using Npgsql;
 namespace Games
 {
     /// <summary>
-    /// Unified token service handling both session tokens (.ROBLOSECURITY) and game tickets.
-    /// Game tickets are stored in memory cache with automatic expiration.
-    /// Session tokens are stored in database with long-term persistence.
+    /// Unified token service handling persistent session tokens and short-lived game tickets.
+    /// Registered-user game tickets are persisted in the database; guest tickets are process-local.
     /// </summary>
     public class TokenService
     {
@@ -203,6 +202,15 @@ WHERE grp = (SELECT grp FROM streak ORDER BY d DESC LIMIT 1)", conn);
         {
             var token = GenerateToken("game_");
             var now = DateTimeOffset.UtcNow;
+
+            // Guest tickets are intentionally process-local for now. Opportunistically
+            // prune expired entries so abandoned guest joins cannot grow this dictionary forever.
+            foreach (var entry in _guestTickets)
+            {
+                if (entry.Value.ExpiresAt <= now)
+                    _guestTickets.TryRemove(entry.Key, out _);
+            }
+
             var ticket = new GameTicket
             {
                 Token = token,
