@@ -12,5 +12,13 @@ namespace Common
                 && port <= 65535
                 && string.Equals(status, "running", System.StringComparison.OrdinalIgnoreCase);
         }
+
+        /// <summary>
+        /// Confirms that a verified live server belongs to the place requested by the client.
+        /// </summary>
+        public static bool IsBoundToPlace(bool serverAlive, long serverPlaceId, long requestedPlaceId)
+        {
+            return serverAlive && requestedPlaceId > 0 && serverPlaceId == requestedPlaceId;
+        }
     }
 }
