@@ -177,19 +177,9 @@ namespace Website.Controllers.Client
                 if (!response.IsSuccessStatusCode)
                     return (false, 0, 0);
 
-                using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-                var root = document.RootElement;
-
-                if (!root.TryGetProperty("placeId", out var placeElement) ||
-                    !placeElement.TryGetInt64(out var actualPlaceId) ||
-                    !root.TryGetProperty("port", out var portElement) ||
-                    !portElement.TryGetInt32(out var actualPort) ||
-                    !root.TryGetProperty("status", out var statusElement) ||
-                    statusElement.ValueKind != JsonValueKind.String ||
-                    !GameServerStatusValidator.IsJoinable(actualPlaceId, actualPort, statusElement.GetString()))
-                {
+                var json = await response.Content.ReadAsStringAsync();
+                if (!ArbiterGameServerStatusParser.TryParse(json, out var actualPlaceId, out var actualPort))
                     return (false, 0, 0);
-                }
 
                 return (true, actualPort, actualPlaceId);
             }
