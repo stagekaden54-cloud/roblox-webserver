@@ -111,7 +111,9 @@ public sealed class GameTicketConsumptionTests : IAsyncLifetime
     [Fact]
     public async Task GuestTicket_CanOnlyBeConsumedOnce()
     {
-        var token = await _service.CreateGameTicketAsync(0, 100);
+        var token = await _service.CreateGameTicketAsync(0, 100, "job-guest");
+
+        Assert.StartsWith("game_", token);
 
         var first = await _service.ConsumeGameTicketAsync(token);
         var second = await _service.ConsumeGameTicketAsync(token);
