@@ -272,7 +272,7 @@ namespace Website.Controllers.Client
                     });
                 }
 
-                if (resumePlaceId != placeId)
+                if (!GameServerStatusValidator.IsBoundToPlace(resumeAlive, resumePlaceId, placeId))
                 {
                     return Ok(new PlaceLauncherResponse
                     {
@@ -298,18 +298,11 @@ namespace Website.Controllers.Client
                 }
             }
 
-            string ticketToken = "";
-            string guestToken = "";
-            if (userId != 0)
-            {
-                ticketToken = await _tokenService.CreateGameTicketAsync(userId, placeId, gameId);
-            }
-            else
-            {
-                var randomSuffix = new Random().Next(1000, 9999);
-                guestToken = $"guest-Guest{randomSuffix}";
-            }
-                        var baseUrl = _configuration["PublicBaseUrl"]?.TrimEnd('/');
+            // Both registered users and guests receive a real, short-lived game ticket.
+            // Guest tickets are currently process-local inside TokenService.
+            var ticketToken = await _tokenService.CreateGameTicketAsync(userId, placeId, gameId);
+
+            var baseUrl = _configuration["PublicBaseUrl"]?.TrimEnd('/');
             int gamestatus = 2; // Success
             var joinScriptUrl = $"{baseUrl}/game/join.ashx?serverPort={serverPort}&gameid={placeId}&jobid={gameId}";
             var authenticationUrl = $"{baseUrl}/Login/Negotiate.ashx";
@@ -320,7 +313,7 @@ namespace Website.Controllers.Client
                 status = gamestatus,
                 joinScriptUrl = joinScriptUrl,
                 authenticationUrl = authenticationUrl,
-                authenticationTicket = ticketToken ?? guestToken, // guest token for guests
+                authenticationTicket = ticketToken,
                 message = null
             });
         }
@@ -559,7 +552,7 @@ namespace Website.Controllers.Client
                     return StatusCode(410, "This game server is no longer available. Please try joining again.");
                 }
 
-                if (serverPlaceId != gameid)
+                if (!GameServerStatusValidator.IsBoundToPlace(serverAlive, serverPlaceId, gameid))
                 {
                     return BadRequest("The requested game server does not belong to this place.");
                 }
