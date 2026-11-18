@@ -65,7 +65,7 @@ namespace Website.Controllers.Client
             {
                 return request switch
                 {
-                    "RequestGame" or "RequestGameJob" or "RequestFollowUser" => await HandleRequestGame(placeId.Value, request, jobid, serverPort, requestId),
+                    "RequestGame" or "RequestGameJob" or "RequestFollowUser" => await HandleRequestGame(placeId.Value, request, jobid, requestId),
                     "RequestPrivateGame" => await HandleRequestPrivateGame(placeId.Value, Request.Query["accessCode"].ToString(), requestId),
                     "CloudEdit" => await HandleCloudEdit(placeId.Value, requestId),
                     "AuthenticateTicket" => await HandleAuthenticateTicket(),
@@ -159,10 +159,10 @@ namespace Website.Controllers.Client
             return await GameCreationService.CreateGameServerAsync((int)placeId, maxPlayers, _configuration, connectionString);
         }
 
-        private async Task<(bool Alive, int Port)> GetGameServerPortAsync(string jobId)
+        private async Task<(bool Alive, int Port, long PlaceId)> GetGameServerInfoAsync(string jobId)
         {
             if (string.IsNullOrWhiteSpace(jobId))
-                return (false, 0);
+                return (false, 0, 0);
 
             try
             {
@@ -171,28 +171,31 @@ namespace Website.Controllers.Client
                 var arbiterUrl = $"http://{arbiterHost}:{arbiterPort}";
                 using var httpClient = HttpClientDefaults.CreateLocalClient();
                 httpClient.Timeout = Common.HttpClientDefaults.Timeout;
-                var response = await httpClient.GetAsync($"{arbiterUrl}/api/gameservers/{jobId}/status");
+
+                var response = await httpClient.GetAsync(
+                    $"{arbiterUrl}/api/gameservers/{Uri.EscapeDataString(jobId)}/status");
                 if (!response.IsSuccessStatusCode)
-                    return (false, 0);
+                    return (false, 0, 0);
 
-                var json = await response.Content.ReadAsStringAsync();
-                var serverInfoOptions = new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-                };
-                var serverInfoDict = JsonSerializer.Deserialize<Dictionary<string, object>>(json, serverInfoOptions);
+                using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                var root = document.RootElement;
 
-                if (serverInfoDict != null && serverInfoDict.TryGetValue("port", out var portObj) &&
-                    int.TryParse(portObj.ToString(), out var actualPort) && actualPort > 0)
+                if (!root.TryGetProperty("placeId", out var placeElement) ||
+                    !placeElement.TryGetInt64(out var actualPlaceId) ||
+                    !root.TryGetProperty("port", out var portElement) ||
+                    !portElement.TryGetInt32(out var actualPort) ||
+                    !root.TryGetProperty("status", out var statusElement) ||
+                    statusElement.ValueKind != JsonValueKind.String ||
+                    !GameServerStatusValidator.IsJoinable(actualPlaceId, actualPort, statusElement.GetString()))
                 {
-                    return (true, actualPort);
+                    return (false, 0, 0);
                 }
 
-                return (true, 0);
+                return (true, actualPort, actualPlaceId);
             }
             catch
             {
-                return (false, 0);
+                return (false, 0, 0);
             }
         }
 
@@ -227,7 +230,7 @@ namespace Website.Controllers.Client
             return ("Unknown", "Unknown");
         }
 
-        private async Task<IActionResult> HandleRequestGame(long placeId, string requestType, string? providedJobId, int? providedServerPort, string requestId)
+        private async Task<IActionResult> HandleRequestGame(long placeId, string requestType, string? providedJobId, string requestId)
         {
             long userId = await GetCurrentUserIdAsync();
             if (userId > 0)
@@ -240,7 +243,7 @@ namespace Website.Controllers.Client
                 var existingPresence = await _gamePresenceService.GetUserGamePresenceAsync(userId);
                 if (existingPresence != null && existingPresence.IsInGame)
                 {
-                    var (presenceAlive, _) = await GetGameServerPortAsync(existingPresence.JobId);
+                    var (presenceAlive, _, _) = await GetGameServerInfoAsync(existingPresence.JobId);
                     if (!string.IsNullOrEmpty(existingPresence.JobId) && !presenceAlive)
                     {
                         await _gamePresenceService.RemoveFromGameAsync(userId);
@@ -255,11 +258,31 @@ namespace Website.Controllers.Client
             string gameId;
             int serverPort;
 
-            var (resumeAlive, resumePort) = await GetGameServerPortAsync(providedJobId ?? "");
-            if (!string.IsNullOrEmpty(providedJobId) && resumeAlive)
+            if (!string.IsNullOrWhiteSpace(providedJobId))
             {
+                var (resumeAlive, resumePort, resumePlaceId) =
+                    await GetGameServerInfoAsync(providedJobId);
+
+                if (!resumeAlive)
+                {
+                    return Ok(new PlaceLauncherResponse
+                    {
+                        status = 4,
+                        message = "The requested game server is no longer available. Please request a new server."
+                    });
+                }
+
+                if (!GameServerStatusValidator.IsBoundToPlace(resumeAlive, resumePlaceId, placeId))
+                {
+                    return Ok(new PlaceLauncherResponse
+                    {
+                        status = 4,
+                        message = "The requested game server does not belong to this place."
+                    });
+                }
+
                 gameId = providedJobId;
-                serverPort = resumePort > 0 ? resumePort : (providedServerPort ?? 53640);
+                serverPort = resumePort;
             }
             else
             {
@@ -275,18 +298,11 @@ namespace Website.Controllers.Client
                 }
             }
 
-            string ticketToken = "";
-            string guestToken = "";
-            if (userId != 0)
-            {
-                ticketToken = await _tokenService.CreateGameTicketAsync(userId, placeId, gameId);
-            }
-            else
-            {
-                var randomSuffix = new Random().Next(1000, 9999);
-                guestToken = $"guest-Guest{randomSuffix}";
-            }
-                        var baseUrl = _configuration["PublicBaseUrl"]?.TrimEnd('/');
+            // Both registered users and guests receive a real, short-lived game ticket.
+            // Guest tickets are currently process-local inside TokenService.
+            var ticketToken = await _tokenService.CreateGameTicketAsync(userId, placeId, gameId);
+
+            var baseUrl = _configuration["PublicBaseUrl"]?.TrimEnd('/');
             int gamestatus = 2; // Success
             var joinScriptUrl = $"{baseUrl}/game/join.ashx?serverPort={serverPort}&gameid={placeId}&jobid={gameId}";
             var authenticationUrl = $"{baseUrl}/Login/Negotiate.ashx";
@@ -297,7 +313,7 @@ namespace Website.Controllers.Client
                 status = gamestatus,
                 joinScriptUrl = joinScriptUrl,
                 authenticationUrl = authenticationUrl,
-                authenticationTicket = ticketToken ?? guestToken, // guest token for guests
+                authenticationTicket = ticketToken,
                 message = null
             });
         }
@@ -528,56 +544,21 @@ namespace Website.Controllers.Client
                     HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity());
                 }
 
-                var arbiterHost = _configuration["Arbiter:Host"] ?? "localhost";
-                var arbiterPort = _configuration["Arbiter:Port"] ?? "5000";
-                var arbiterUrl = $"http://{arbiterHost}:{arbiterPort}";
-                
-                using var httpClient = HttpClientDefaults.CreateLocalClient();
-                httpClient.Timeout = Common.HttpClientDefaults.Timeout;
-                
-                try
+                var (serverAlive, verifiedPort, serverPlaceId) =
+                    await GetGameServerInfoAsync(jobid);
+
+                if (!serverAlive)
                 {
-                    var response = await httpClient.GetAsync($"{arbiterUrl}/api/gameservers/{jobid}/status");
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        try
-                        {
-                            var connectionString = _configuration.GetConnectionString("Default");
-                            var maxPlayers = await GameCreationService.GetPlaceMaxPlayersAsync(gameid, connectionString);
-                            var (newJobId, newPort) = await GameCreationService.CreateGameServerAsync((int)gameid, maxPlayers, _configuration, connectionString);
-                            jobid = newJobId;
-                            serverPort = newPort;
-                        }
-                        catch (Exception createEx)
-                        {
-                            return StatusCode(410, "This game server is no longer available. Please try joining again.");
-                        }
-                    }
-                    else
-                    {
-                        var json = await response.Content.ReadAsStringAsync();
-
-                        var serverInfoOptions = new JsonSerializerOptions 
-                        { 
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase 
-                        };
-
-                        var serverInfoDict = JsonSerializer.Deserialize<Dictionary<string, object>>(json, serverInfoOptions);
-
-                        if (serverInfoDict != null && serverInfoDict.TryGetValue("port", out var portObj) && 
-                            int.TryParse(portObj.ToString(), out var actualPort))
-                        {
-                            if (actualPort != serverPort)
-                            {
-                                serverPort = actualPort;
-                            }
-                        }
-                    }
+                    return StatusCode(410, "This game server is no longer available. Please try joining again.");
                 }
-                catch (Exception ex)
+
+                if (!GameServerStatusValidator.IsBoundToPlace(serverAlive, serverPlaceId, gameid))
                 {
-                    System.Diagnostics.Debug.WriteLine($"[DEBUG] Error getting server port from Arbiter: {ex.Message}");
+                    return BadRequest("The requested game server does not belong to this place.");
                 }
+
+                // The Arbiter is authoritative for the active job's port.
+                serverPort = verifiedPort;
 
                 var joinPortWaitSeconds = _configuration.GetValue<int?>("GameServer:JoinPortWaitSeconds") ?? 30;
                 if (joinPortWaitSeconds > 0 &&
