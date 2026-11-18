@@ -17,5 +17,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../Assemblies/Common/Common.csproj" />
+    <Compile Include="../../Website/Controllers/Client/ArbiterGameServerStatusParser.cs" Link="ArbiterGameServerStatusParser.cs" />
   </ItemGroup>
 </Project>
