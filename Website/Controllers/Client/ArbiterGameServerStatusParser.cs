@@ -23,8 +23,10 @@ namespace Common
 
                 if (root.ValueKind != JsonValueKind.Object ||
                     !root.TryGetProperty("placeId", out var placeElement) ||
+                    placeElement.ValueKind != JsonValueKind.Number ||
                     !placeElement.TryGetInt64(out var parsedPlaceId) ||
                     !root.TryGetProperty("port", out var portElement) ||
+                    portElement.ValueKind != JsonValueKind.Number ||
                     !portElement.TryGetInt32(out var parsedPort) ||
                     !root.TryGetProperty("status", out var statusElement) ||
                     statusElement.ValueKind != JsonValueKind.String ||
