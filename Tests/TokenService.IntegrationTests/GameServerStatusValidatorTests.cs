@@ -18,6 +18,19 @@ public sealed class GameServerStatusValidatorTests
     }
 
     [Theory]
+    [InlineData(true, 123, 123, true)]
+    [InlineData(false, 123, 123, false)]
+    [InlineData(true, 456, 123, false)]
+    [InlineData(true, 0, 123, false)]
+    [InlineData(true, 123, 0, false)]
+    public void ServerMustBeAliveAndBoundToRequestedPlace(
+        bool serverAlive, long serverPlaceId, long requestedPlaceId, bool expected)
+    {
+        Assert.Equal(expected, GameServerStatusValidator.IsBoundToPlace(
+            serverAlive, serverPlaceId, requestedPlaceId));
+    }
+
+    [Theory]
     [InlineData(0, 53640, "running")]
     [InlineData(-1, 53640, "running")]
     [InlineData(123, 0, "running")]
